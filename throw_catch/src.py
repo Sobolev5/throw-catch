@@ -6,7 +6,7 @@ import datetime
 from typing import Union
 
 
-def throw(payload:dict={}, tag: str="throwed", uri:str=None, routing_key: str="throw_catch", ttl :int=180, **kwargs) -> Union[None, str]:
+def throw(payload:dict={}, tag: str=None, uri: str=None, routing_key: str="throw_catch", ttl :int=180, **kwargs) -> Union[None, str]:
     """ 
     throw [send message to rabbitmq]:
     payload: dict ~ payload data 
@@ -18,8 +18,9 @@ def throw(payload:dict={}, tag: str="throwed", uri:str=None, routing_key: str="t
 
     assert bool(payload), "Payload dictionary required" 
     assert isinstance(uri, str) and len(uri) > 0 and len(uri) < 256, "AMQP uri required and must be string" 
-    assert isinstance(routing_key, str) and routing_key.isascii() and len(routing_key) < 256, "Invalid routing key name"  
-    assert isinstance(tag, str) and tag.isascii() and len(tag) > 0 and len(tag) < 256, "Invalid tag name or tag is empty" 
+    assert isinstance(routing_key, str) and routing_key.isascii() and len(routing_key) < 256, "Invalid routing key name" 
+    if tag: 
+        assert isinstance(tag, str) and tag.isascii() and len(tag) < 256, "Invalid tag name" 
     assert isinstance(ttl, int) and ttl >= 0, "TTL message must be positive integer" 
 
     stack = traceback.extract_stack()
@@ -64,7 +65,7 @@ def throw(payload:dict={}, tag: str="throwed", uri:str=None, routing_key: str="t
         connection.close()
 
 
-def catch(tag: str="throwed", uri: str=None, queue: str="throw_catch", count: int=1, **kwargs) -> list[dict]:
+def catch(tag: str=None, uri: str=None, queue: str="throw_catch", count: int=1, **kwargs) -> list[dict]:
     """ 
     catch [get message from rabbitmq]:
     tag:str ~ message tag
@@ -75,7 +76,8 @@ def catch(tag: str="throwed", uri: str=None, queue: str="throw_catch", count: in
 
     assert isinstance(uri, str) and len(uri) > 0 and len(uri) < 256, "AMQP uri required and must be string" 
     assert isinstance(queue, str) and queue.isascii() and len(queue) < 256, "Invalid queue name"
-    assert isinstance(tag, str) and tag.isascii() and len(tag) > 0 and len(tag) < 256, "Invalid tag name or tag is empty" 
+    if tag:
+        assert isinstance(tag, str) and tag.isascii() and len(tag) < 256, "Invalid tag name" 
 
     messages = []
 
