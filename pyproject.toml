@@ -1,0 +1,18 @@
+[tool.poetry]
+name = "throw-catch"
+version = "0.2.0"
+description = "RabbitMQ throw & catch messages"
+authors = ["Andrey Sobolev <email.asobolev@gmail.com>"]
+readme = "README.md"
+packages = [
+    {include = "throw_catch"},
+]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+orjson = "^3.8"
+pika = "^1.3"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "8.0.1"
+pytest-mock = "3.10.0"
