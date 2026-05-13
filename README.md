@@ -90,15 +90,15 @@ clear(
 
 ## API
 
-### `throw(payload, tag=None, uri=None, routing_key="throw_catch", ttl=180)`
+`throw(payload, tag=None, uri=None, routing_key="throw_catch", ttl=180)`
 
 Publishes a message to the target queue.
 
-### `catch(tag=None, uri=None, queue="throw_catch", count=1)`
+`catch(tag=None, uri=None, queue="throw_catch", count=1)`
 
 Reads up to `count` messages from the queue and returns them as a list.
 
-### `clear(uri=None, queue="throw_catch")`
+`clear(uri=None, queue="throw_catch")`
 
 Deletes the target queue.
 
