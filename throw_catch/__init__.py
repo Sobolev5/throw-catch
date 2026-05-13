@@ -1,1 +1,3 @@
-from .src import throw, catch, clear
+from .src import catch, clear, throw
+
+__all__ = ["throw", "catch", "clear"]

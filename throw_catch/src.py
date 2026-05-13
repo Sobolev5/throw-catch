@@ -1,165 +1,137 @@
-import pika
+"""Public RabbitMQ helpers for throwing and catching messages."""
+
+import datetime as dt
 import logging
-import orjson
 import traceback
-import datetime
-from typing import Union
+from typing import Any, Dict, List, Optional, Tuple
+
+import orjson
+import pika
+
+
+LOGGER = logging.getLogger(__name__)
+DEFAULT_QUEUE = "throw_catch"
+MAX_NAME_LENGTH = 255
+MAX_URI_LENGTH = 255
+
+
+def _validate_uri(uri: Optional[str]) -> str:
+    assert (
+        isinstance(uri, str) and 0 < len(uri) <= MAX_URI_LENGTH
+    ), "AMQP uri required and must be string"
+    return uri
+
+
+def _validate_ascii_name(value: Optional[str], field_name: str) -> Optional[str]:
+    if value is None:
+        return None
+
+    assert (
+        isinstance(value, str) and value.isascii() and 0 < len(value) <= MAX_NAME_LENGTH
+    ), f"Invalid {field_name} name"
+    return value
+
+
+def _open_channel(uri: str, queue_name: str) -> Tuple[pika.BlockingConnection, Any]:
+    connection = pika.BlockingConnection(pika.URLParameters(uri))
+    channel = connection.channel()
+    channel.queue_declare(queue=queue_name, durable=False)
+    return connection, channel
 
 
 def throw(
-    payload: dict = {},
-    tag: str = None,
-    uri: str = None,
-    routing_key: str = "throw_catch",
+    payload: Optional[Dict[str, Any]] = None,
+    tag: Optional[str] = None,
+    uri: Optional[str] = None,
+    routing_key: str = DEFAULT_QUEUE,
     ttl: int = 180,
-) -> Union[None, str]:
-    """Throw message in RabbitMQ.
+) -> None:
+    """Send a message to RabbitMQ."""
 
-    Args:
-        payload (dict, optional): payload dict. Defaults to {}.
-        tag (str, optional): message tag. Defaults to None.
-        uri (str, optional): AMQP uri. Defaults to None.
-        routing_key (str, optional): routring key. Defaults to "throw_catch".
-        ttl (int, optional): time to live. Defaults to 180.
-    """
-    assert bool(payload), "Payload dictionary required"
-    assert (
-        isinstance(uri, str) and len(uri) > 0 and len(uri) < 256
-    ), "AMQP uri required and must be string"
-    assert (
-        isinstance(routing_key, str)
-        and routing_key.isascii()
-        and len(routing_key) < 256
-    ), "Invalid routing key name"
-
-    if tag:
-        assert (
-            isinstance(tag, str) and tag.isascii() and len(tag) < 256
-        ), "Invalid tag name"
-
+    assert isinstance(payload, dict) and payload, "Payload dictionary required"
+    validated_uri = _validate_uri(uri)
+    validated_routing_key = _validate_ascii_name(routing_key, "routing key")
+    validated_tag = _validate_ascii_name(tag, "tag")
     assert isinstance(ttl, int) and ttl >= 0, "TTL message must be positive integer"
 
     stack = traceback.extract_stack()
-    filename, lineno, function_name, code = stack[-2]
+    filename, lineno, function_name, _ = stack[-2]
 
     connection = None
-    channel = None
-
     try:
-        connection = pika.BlockingConnection(pika.URLParameters(uri))
-        channel = connection.channel()
-        channel.queue_declare(queue=routing_key, durable=False)
-    except Exception as e:
-        logging.exception(f"{e}")
+        connection, channel = _open_channel(validated_uri, validated_routing_key)
+        message = {
+            "payload": payload,
+            "tag": validated_tag,
+            "routing_key": validated_routing_key,
+            "ttl": ttl,
+            "filename": filename,
+            "function_name": function_name,
+            "lineno": lineno,
+            "send_datetime": dt.datetime.now(dt.timezone.utc).isoformat(),
+        }
+        publish_kwargs = {
+            "exchange": "",
+            "routing_key": validated_routing_key,
+            "body": orjson.dumps(message, default=str),
+        }
 
-    if connection and channel:
-        try:
-            body = {
-                "payload": payload,
-                "tag": tag,
-                "routing_key": routing_key,
-                "ttl": ttl,
-                "filename": filename,
-                "function_name": function_name,
-                "lineno": lineno,
-                "send_datetime": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            }
+        if ttl > 0:
+            publish_kwargs["properties"] = pika.BasicProperties(
+                expiration=str(60000 * ttl)
+            )
 
-            body = orjson.dumps(body, default=str)
-            if ttl == 0:
-                channel.basic_publish(
-                    exchange="",
-                    routing_key=routing_key,
-                    body=body,
-                )
-            else:
-                channel.basic_publish(
-                    exchange="",
-                    routing_key=routing_key,
-                    properties=pika.BasicProperties(expiration=str(60000 * ttl)),
-                    body=body,
-                )
-        except Exception:
-            logging.exception("{e}")
-
-    else:
-        logging.exception(
-            f"pika channel opening failed connection={connection} channel={channel}"
-        )
-
-    if connection:
-        connection.close()
+        channel.basic_publish(**publish_kwargs)
+    except Exception:
+        LOGGER.exception("Failed to publish message to RabbitMQ")
+    finally:
+        if connection:
+            connection.close()
 
 
 def catch(
-    tag: str = None,
-    uri: str = None,
-    queue: str = "throw_catch",
+    tag: Optional[str] = None,
+    uri: Optional[str] = None,
+    queue: str = DEFAULT_QUEUE,
     count: int = 1,
-) -> list[dict]:
-    """Catch message from RabbitMQ.
+) -> List[Dict[str, Any]]:
+    """Receive up to ``count`` messages from a RabbitMQ queue."""
 
-    Args:
-        tag (str, optional): message tag. Defaults to None.
-        uri (str, optional): AMQP uri. Defaults to None.
-        queue (str, optional): queue. Defaults to "throw_catch".
-        count (int, optional): count messages. Defaults to 1.
+    validated_uri = _validate_uri(uri)
+    validated_queue = _validate_ascii_name(queue, "queue")
+    validated_tag = _validate_ascii_name(tag, "tag")
+    assert isinstance(count, int) and count > 0, "Count must be positive integer"
 
-    Returns:
-        list[dict]: _description_
-    """
+    messages: List[Dict[str, Any]] = []
+    connection, channel = _open_channel(validated_uri, validated_queue)
 
-    assert (
-        isinstance(uri, str) and len(uri) > 0 and len(uri) < 256
-    ), "AMQP uri required and must be string"
-    assert (
-        isinstance(queue, str) and queue.isascii() and len(queue) < 256
-    ), "Invalid queue name"
+    try:
+        for _ in range(count):
+            method_frame, _header_frame, body = channel.basic_get(validated_queue)
+            if not method_frame:
+                break
 
-    if tag:
-        assert (
-            isinstance(tag, str) and tag.isascii() and len(tag) < 256
-        ), "Invalid tag name"
+            message = orjson.loads(body)
+            if not validated_tag or message.get("tag") == validated_tag:
+                messages.append(message)
+                channel.basic_ack(method_frame.delivery_tag)
+    finally:
+        connection.close()
 
-    messages = []
-    connection = pika.BlockingConnection(pika.URLParameters(uri))
-    channel = connection.channel()
-    channel.queue_declare(queue=queue, durable=False)
-
-    for _ in range(count):
-        method_frame, header_frame, body = channel.basic_get(queue)
-        if method_frame:
-            message = orjson.loads(body.decode())
-            if message:
-                if not tag or (message["tag"] == tag):
-                    messages.append(message)
-                    channel.basic_ack(method_frame.delivery_tag)
-        else:
-            break
-
-    connection.close()
     return messages
 
 
 def clear(
-    uri: str = None,
-    queue: str = "throw_catch",
+    uri: Optional[str] = None,
+    queue: str = DEFAULT_QUEUE,
 ) -> None:
-    """CLear messages queue.
+    """Delete a RabbitMQ queue."""
 
-    Args:
-        uri (str, optional): AMQP uri.
-        queue (str, optional): queue. Defaults to "throw_catch".
-    """
+    validated_uri = _validate_uri(uri)
+    validated_queue = _validate_ascii_name(queue, "queue")
 
-    assert (
-        isinstance(uri, str) and len(uri) > 0 and len(uri) < 256
-    ), "AMQP uri required and must be string"
-    assert (
-        isinstance(queue, str) and queue.isascii() and len(queue) < 256
-    ), "Invalid queue name"
-
-    connection = pika.BlockingConnection(pika.URLParameters(uri))
-    channel = connection.channel()
-    channel.queue_delete(queue=queue)
-    connection.close()
+    connection, channel = _open_channel(validated_uri, validated_queue)
+    try:
+        channel.queue_delete(queue=validated_queue)
+    finally:
+        connection.close()
